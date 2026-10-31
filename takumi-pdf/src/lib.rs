@@ -120,6 +120,7 @@
 use std::{mem::take, rc::Rc};
 
 mod bands;
+mod boxes;
 mod chunks;
 mod counters;
 mod emitter;
@@ -178,6 +179,7 @@ use takumi_core::{
 /// Written as `/Producer` and `pdf:Producer` in every document takumi renders.
 pub const PRODUCER: &str = concat!("takumi-pdf ", env!("CARGO_PKG_VERSION"));
 
+pub use crate::boxes::PageBox;
 pub use crate::options::{
   Attachment, AttachmentRelationship, Band, MeasureOptions, MeasuredSize, PageBand, PageMargin,
   PageMargins, PageOptions, PageOverride, PageRange, PageRules, PdfDate, PdfError, PdfMetadata,
@@ -193,7 +195,7 @@ use crate::{
     Document, SerializeSettings,
     configure::ConfigurationBuilder,
     destination::XyzDestination,
-    geom::{Point, Size as KrillaSize, Transform},
+    geom::{Point, Rect as KrillaRect, Size as KrillaSize, Transform},
     page::PageSettings,
   },
   options::{PT_PER_PX, PageSelection},
@@ -264,9 +266,33 @@ pub fn render(options: PdfOptions<'_>) -> Result<Vec<u8>, PdfError> {
   render_settling(options, SETTLED_PAGES)
 }
 
+/// A PDF and where its elements landed on its pages.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct RenderedPdf {
+  /// The PDF bytes.
+  pub pdf: Vec<u8>,
+  /// Every visible fragment of every element, page by page in paint order.
+  pub boxes: Vec<PageBox>,
+}
+
+/// Renders like [`render`], and reports where each element's boxes land on the pages.
+pub fn render_with_boxes(options: PdfOptions<'_>) -> Result<RenderedPdf, PdfError> {
+  render_document(options, SETTLED_PAGES, true)
+}
+
 /// [`render`] with `settle`, given the layout, saying how many of the first pages of a document
 /// that streams are safe to draw.
-fn render_settling(mut options: PdfOptions<'_>, settle: Settle<'_>) -> Result<Vec<u8>, PdfError> {
+fn render_settling(options: PdfOptions<'_>, settle: Settle<'_>) -> Result<Vec<u8>, PdfError> {
+  render_document(options, settle, false).map(|rendered| rendered.pdf)
+}
+
+/// [`render_settling`], collecting the elements' boxes when `boxes` is set.
+fn render_document(
+  mut options: PdfOptions<'_>,
+  settle: Settle<'_>,
+  boxes: bool,
+) -> Result<RenderedPdf, PdfError> {
   let attachments = take(&mut options.attachments);
   let mut pdf = open_document(&options, attachments)?;
   let tagged = options.writes_structure();
@@ -284,7 +310,12 @@ fn render_settling(mut options: PdfOptions<'_>, settle: Settle<'_>) -> Result<Ve
       .forbids_placeholder()
       .or_else(|| options.tagged.forbids_placeholder()),
   );
-  let state = DocumentState::new(tagged, inputs.lang.as_ref().map(Lang::as_str), uncovered);
+  let state = DocumentState::new(
+    tagged,
+    boxes,
+    inputs.lang.as_ref().map(Lang::as_str),
+    uncovered,
+  );
   let structural = options.tagged.names_structure_destinations();
   let rendered = match options.page {
     Some(page) => {
@@ -341,11 +372,16 @@ fn render_settling(mut options: PdfOptions<'_>, settle: Settle<'_>) -> Result<Ve
   }
   // The layout and scene are done with; serializing the fonts and objects needs neither.
   drop(rendered);
-  if let Some(error) = state.into_error() {
+  let (boxes, error) = state.finish();
+
+  if let Some(error) = error {
     return Err(error);
   }
 
-  pdf.finish().map_err(PdfError::Krilla)
+  Ok(RenderedPdf {
+    pdf: pdf.finish().map_err(PdfError::Krilla)?,
+    boxes,
+  })
 }
 
 /// A document with its validators, metadata and attachments set, before any
@@ -466,6 +502,18 @@ impl SinglePage {
     emitter.emit(&mut surface)?;
     surface.pop();
     surface.finish();
+    if let Some(boxes) = &state.boxes
+      && let Some(window) = KrillaRect::from_ltrb(
+        0.0,
+        0.0,
+        content.scene.size.width,
+        content.scene.size.height,
+      )
+    {
+      boxes
+        .borrow_mut()
+        .collect(content.view(), page.index(), window, CorePoint::ZERO);
+    }
     let rendered = Self {
       interactive: Interactive::collect(&content),
       content,

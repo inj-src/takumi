@@ -12,13 +12,14 @@ use takumi_core::{
 
 use crate::{
   bands::Repeatable,
+  boxes::SourceOrders,
   counters::{
     BoxPages, FlowCounters, has_page_counters, has_target_counters, substitute_target_counters,
   },
   interactive::{AnchorTarget, PageSummary, has_internal_links, has_summary_targets},
   options::PdfError,
   page::PageFrame,
-  tree::{PagedContent, TreeInputs},
+  tree::{INPUT_ROOT, PagedContent, TreeInputs},
 };
 
 /// How many pages one render may lay its content out on. A document tall enough to pass this is
@@ -108,14 +109,17 @@ impl Counted {
     inputs: &TreeInputs<'_>,
     frame: &PageFrame,
     settle: Settle<'_>,
-  ) -> Result<Self, PdfError> {
+    input: Option<&Node>,
+  ) -> Result<(Self, Option<SourceOrders>), PdfError> {
     let links = has_internal_links(&node);
     let collect = Collect::of(&node, links);
 
     let numbered = collect == Collect::Extents || has_target_counters(&node);
 
     if !numbered {
-      return Ok(CountingPass::run(node, inputs, frame, settle, collect)?.into_counted(links));
+      let counted = CountingPass::run(node, inputs, frame, settle, collect)?.into_counted(links);
+
+      return Ok((counted, None));
     }
 
     let mut previous: Vec<String> = Vec::new();
@@ -126,16 +130,21 @@ impl Counted {
 
       pass.substitute_counters(&mut node, &mut written);
       if written == previous {
+        let orders = input.map(|input| SourceOrders::between(input, &node));
+
         // The pass was laid out with the numbers it wrote.
-        return Ok(pass.into_counted(links));
+        return Ok((pass.into_counted(links), orders));
       }
       previous = written;
     }
     // The numbers are still moving, and this was the last pass allowed. They are laid out once
     // more so the page shows the numbers it was laid out with.
-    Ok(Self::Laid(Box::new(Paginated::lay_out(
-      node, inputs, frame,
-    )?)))
+    let orders = input.map(|input| SourceOrders::between(input, &node));
+
+    Ok((
+      Self::Laid(Box::new(Paginated::lay_out(node, inputs, frame)?)),
+      orders,
+    ))
   }
 
   pub(crate) fn pages(&self) -> usize {
@@ -242,8 +251,7 @@ impl CountingPass {
           next: extent.flow_bottom.as_ref().map(page_at),
         };
 
-        // `fill_root` wraps the tree in a page-wide box, which takes preorder 0.
-        Some((order.checked_sub(1)?, pages))
+        Some((order.checked_sub(INPUT_ROOT)?, pages))
       })
       .collect();
     let repeated: Vec<_> = self
@@ -251,7 +259,7 @@ impl CountingPass {
       .repeated
       .iter()
       .filter_map(Repeatable::source_orders)
-      .map(|orders| orders.start.saturating_sub(1)..orders.end.saturating_sub(1))
+      .map(|orders| orders.start.saturating_sub(INPUT_ROOT)..orders.end.saturating_sub(INPUT_ROOT))
       .collect();
 
     FlowCounters::new(&page_of, pages, &repeated).substitute(node, None, written);

@@ -173,6 +173,27 @@ export type MeasureOptions = (
 /** A node tree's laid-out size in CSS px. */
 export type MeasuredSize = { width: number; height: number };
 
+/** One fragment of an element on one page, in pt from the page's top-left corner. */
+export type PageBox = {
+  /** The output page, from 0. */
+  page: number;
+  /** The element's position in the input tree: every node counts, in document order, from 0 at the root. */
+  sourceOrder: number;
+  /** Absent for a node built without a tag, such as text. */
+  tagName?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/** A PDF and where its elements landed on its pages. */
+export type RenderedPdf = {
+  pdf: Uint8Array;
+  /** Every fragment of every element on the pages, page by page in paint order. */
+  boxes: PageBox[];
+};
+
 /** Document metadata written to the PDF's info dictionary. */
 export type PdfMetadata = {
   /** The document title. */
@@ -488,6 +509,21 @@ export class PdfRenderer extends WasmRenderer<RegisteredFamily, PdfRendererInter
     );
   }
 
+  /** Renders like {@link render}, and reports where each element's boxes land on the pages. */
+  renderWithBoxes(document: PreparedSource, options?: PreparedRenderOptions): Promise<RenderedPdf>;
+  renderWithBoxes(node: NodeInput, options?: RenderOptions): Promise<RenderedPdf>;
+  async renderWithBoxes(
+    node: PreparedSource | NodeInput,
+    options: RenderOptions = {},
+  ): Promise<RenderedPdf> {
+    return renderPrepared(
+      this.fonts,
+      node instanceof Prepared ? node : await this.read(node, options),
+      node instanceof Prepared ? options : { signal: options.signal },
+      (native, opts) => this.inner.renderWithBoxes(native, opts),
+    );
+  }
+
   /**
    * Lays out a node tree without rendering and returns its size in CSS px.
    *
@@ -563,6 +599,21 @@ export function render(
   options?: RenderOptions,
 ): Promise<Uint8Array> {
   return node instanceof Prepared ? shared().render(node, options) : shared().render(node, options);
+}
+
+/** Renders with boxes with a lazily created shared {@link PdfRenderer}. */
+export function renderWithBoxes(
+  document: PreparedSource,
+  options?: PreparedRenderOptions,
+): Promise<RenderedPdf>;
+export function renderWithBoxes(node: NodeInput, options?: RenderOptions): Promise<RenderedPdf>;
+export function renderWithBoxes(
+  node: PreparedSource | NodeInput,
+  options?: RenderOptions,
+): Promise<RenderedPdf> {
+  return node instanceof Prepared
+    ? shared().renderWithBoxes(node, options)
+    : shared().renderWithBoxes(node, options);
 }
 
 /** Measures with a lazily created shared {@link PdfRenderer}. */

@@ -216,6 +216,27 @@ export type MeasureOptions = (
 /** A node tree's laid-out size in CSS px. */
 export type MeasuredSize = { width: number; height: number };
 
+/** One fragment of an element on one page, in pt from the page's top-left corner. */
+export type PageBox = {
+  /** The output page, from 0. */
+  page: number;
+  /** The element's position in the input tree: every node counts, in document order, from 0 at the root. */
+  sourceOrder: number;
+  /** Absent for a node built without a tag, such as text. */
+  tagName?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+/** A PDF and where its elements landed on its pages. */
+export type RenderedPdf = {
+  pdf: Uint8Array<ArrayBuffer>;
+  /** Every fragment of every element on the pages, page by page in paint order. */
+  boxes: PageBox[];
+};
+
 /** The images a node tree looks up by URL and the listed fonts the render loads, read after the cascade. */
 export type RenderNeeds = {
   images: string[];

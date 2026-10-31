@@ -231,6 +231,9 @@ fn fill_root(node: Node, viewport: Viewport) -> Node {
   Node::container([node]).with_style(style)
 }
 
+/// The caller's root in source order, behind the box [`fill_root`] wraps it in.
+pub(crate) const INPUT_ROOT: usize = 1;
+
 /// The node at a source order, counted the way the render tree numbers the
 /// source tree it is built from.
 fn node_in_source_order(node: &Node, index: usize) -> Option<&Node> {

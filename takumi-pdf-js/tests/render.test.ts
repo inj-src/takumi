@@ -60,6 +60,39 @@ test("defaults to paged A4 without options", async () => {
   expect(pageCount(pdf)).toBe(1);
 });
 
+test("renderWithBoxes renders the same PDF and boxes the root on every page", async () => {
+  const options = { size: { width: 320, height: 240 }, margin: 24 };
+  const [pdf, rendered] = await Promise.all([
+    renderer.render(rows(60), options),
+    renderer.renderWithBoxes(rows(60), options),
+  ]);
+  const pages = pageCount(pdf);
+
+  expect(rendered.pdf).toEqual(pdf);
+  expect(pages).toBeGreaterThan(1);
+  expect(rendered.boxes.filter((box) => box.sourceOrder === 0).map((box) => box.page)).toEqual(
+    Array.from({ length: pages }, (_, page) => page),
+  );
+});
+
+test("renderWithBoxes numbers nodes in the order of the input tree", async () => {
+  const tree = container({
+    tagName: "main",
+    style: { display: "flex", flexDirection: "column", width: "100%" },
+    children: [
+      container({ tagName: "header", children: [text("Title", { fontSize: 24 })] }),
+      container({ tagName: "section", children: [text("Body", { fontSize: 16 })] }),
+    ],
+  });
+  const { boxes } = await renderer.renderWithBoxes(tree, {
+    viewport: { width: 400, height: 200 },
+  });
+  const sourceOrder = (tagName: string) =>
+    boxes.find((box) => box.tagName === tagName)?.sourceOrder;
+
+  expect([sourceOrder("main"), sourceOrder("header"), sourceOrder("section")]).toEqual([0, 1, 3]);
+});
+
 test("renders an HTML string with its own stylesheet", async () => {
   const pdf = await renderer.render(
     `<style>.title { font-size: 32px }</style><div class="title">Hello PDF</div>`,
