@@ -45,6 +45,7 @@ use crate::paint::{RasterizedImages, rasterized_image};
 #[cfg(all(feature = "svg", feature = "images"))]
 use crate::svg::SvgPainter;
 use crate::{
+  boxes::{BoxCollector, PageBox},
   chunks::{ResolvedChunk, SceneChunks},
   filter::{ColorFilter, filtered, unsupported_filter},
   glyph::{ColorGlyphs, PdfGlyph, Uncovered, run_glyphs},
@@ -114,12 +115,19 @@ pub(crate) struct DocumentState<'a> {
   issues: RefCell<RenderIssues>,
   /// The document's default language.
   pub(crate) lang: Option<&'a str>,
+  /// Present when the render reports where elements land.
+  pub(crate) boxes: Option<RefCell<BoxCollector>>,
   #[cfg(feature = "images")]
   images: RasterizedImages,
 }
 
 impl<'a> DocumentState<'a> {
-  pub(crate) fn new(tagged: bool, lang: Option<&'a str>, uncovered: Uncovered) -> Self {
+  pub(crate) fn new(
+    tagged: bool,
+    boxes: bool,
+    lang: Option<&'a str>,
+    uncovered: Uncovered,
+  ) -> Self {
     Self {
       fonts: RefCell::new(FontMap::default()),
       tags: tagged.then(RefCell::default),
@@ -128,16 +136,24 @@ impl<'a> DocumentState<'a> {
         failure: None,
       }),
       lang,
+      boxes: boxes.then(RefCell::default),
       #[cfg(feature = "images")]
       images: RasterizedImages::default(),
     }
   }
 
-  /// The error the pages left behind, if any.
-  pub(crate) fn into_error(self) -> Option<PdfError> {
+  /// The boxes the pages collected, and the error they left behind, if any.
+  pub(crate) fn finish(self) -> (Vec<PageBox>, Option<PdfError>) {
     let issues = self.issues.into_inner();
+    let boxes = self
+      .boxes
+      .map(|collector| collector.into_inner().boxes)
+      .unwrap_or_default();
 
-    issues.failure.or_else(|| issues.uncovered.into_error())
+    (
+      boxes,
+      issues.failure.or_else(|| issues.uncovered.into_error()),
+    )
   }
 }
 
@@ -1602,7 +1618,7 @@ impl PropertySink for ChunkWriter<'_, '_, '_> {
     // never be emitted; only a clip in page space maps onto the window's axis.
     if current == Affine::IDENTITY
       && relative.only_translation()
-      && let Some((top, bottom)) = vertical_extent(shape)
+      && let Some((_, top, _, bottom)) = shape_extents(shape)
     {
       self
         .emitter
@@ -1660,13 +1676,28 @@ impl PropertySink for ChunkWriter<'_, '_, '_> {
   }
 }
 
-/// How far `shape` reaches down from its origin, as `(top, bottom)`.
-fn vertical_extent(shape: &FillShape) -> Option<(f32, f32)> {
+/// The rect `shape` lies within in its own space, as `(left, top, right, bottom)`; `None` for a path.
+pub(crate) fn shape_extents(shape: &FillShape) -> Option<(f32, f32, f32, f32)> {
   match shape {
-    FillShape::Rect(size) => Some((0.0, size.height)),
-    FillShape::RoundedRect { size, offset, .. } => Some((offset.y, offset.y + size.height)),
-    FillShape::Ellipse { center, radius } => Some((center.y - radius.y, center.y + radius.y)),
-    FillShape::Contoured(clip) => Some((clip.offset.y, clip.offset.y + clip.size.height)),
+    FillShape::Rect(size) => Some((0.0, 0.0, size.width, size.height)),
+    FillShape::RoundedRect { size, offset, .. } => Some((
+      offset.x,
+      offset.y,
+      offset.x + size.width,
+      offset.y + size.height,
+    )),
+    FillShape::Ellipse { center, radius } => Some((
+      center.x - radius.x,
+      center.y - radius.y,
+      center.x + radius.x,
+      center.y + radius.y,
+    )),
+    FillShape::Contoured(clip) => Some((
+      clip.offset.x,
+      clip.offset.y,
+      clip.offset.x + clip.size.width,
+      clip.offset.y + clip.size.height,
+    )),
     FillShape::Path { .. } => None,
   }
 }

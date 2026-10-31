@@ -214,6 +214,11 @@ impl<'a> Page<'a> {
     }
   }
 
+  /// The page's index in the document.
+  pub fn index(&self) -> usize {
+    self.page_index
+  }
+
   pub(crate) fn root_transform(&self) -> Transform {
     page_root_transform(self.page_settings.surface_size().height())
   }

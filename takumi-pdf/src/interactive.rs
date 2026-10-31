@@ -116,7 +116,7 @@ pub(crate) fn xyz_destination(
 
 /// The axis-aligned bounding box of a node-local rect under the node's
 /// absolute transform, in content coordinates.
-fn transformed_rect(
+pub(crate) fn transformed_rect(
   transform: Affine,
   origin: CorePoint<f32>,
   size: Size<f32>,
@@ -366,17 +366,17 @@ impl PageSummary {
   }
 }
 
-struct PaintedBox<'s> {
-  node: &'s RenderNode,
-  source: &'s Node,
+pub(crate) struct PaintedBox<'s> {
+  pub(crate) node: &'s RenderNode,
+  pub(crate) source: &'s Node,
   layout: Layout,
-  rect: KrillaRect,
+  pub(crate) rect: KrillaRect,
   /// Whether a repeated fragment, such as a table header on a later page, paints it.
   repeated: bool,
 }
 
 impl<'s> PaintedBox<'s> {
-  fn of(scene: SceneView<'s>, paint: &NodePaint) -> Option<Self> {
+  pub(crate) fn of(scene: SceneView<'s>, paint: &NodePaint) -> Option<Self> {
     let node = scene.root.node_at_path(&paint.path)?;
     let layout = scene.enter(paint).ok()?;
     let source = node.node.as_ref()?;
@@ -544,6 +544,26 @@ fn collect_inline_links(
   }
 }
 
+/// The part of `rect` a page spanning `(y0, y1)` shows, in pt, `offset` mapping content to page.
+pub(crate) fn page_rect(
+  rect: KrillaRect,
+  (y0, y1): (f32, f32),
+  offset: CorePoint<f32>,
+) -> Option<KrillaRect> {
+  let top = rect.top().max(y0);
+  let bottom = rect.bottom().min(y1);
+
+  if bottom <= top {
+    return None;
+  }
+  KrillaRect::from_ltrb(
+    (rect.left() + offset.x) * PT_PER_PX,
+    (top - y0 + offset.y) * PT_PER_PX,
+    (rect.right() + offset.x) * PT_PER_PX,
+    (bottom - y0 + offset.y) * PT_PER_PX,
+  )
+}
+
 /// Adds this page's slice of every link as annotations. `(y0, y1)` is the page's span in content
 /// coordinates; `offset` maps content to page coordinates.
 pub(crate) fn add_link_annotations<'l>(
@@ -555,18 +575,7 @@ pub(crate) fn add_link_annotations<'l>(
   anchor: impl Fn(&str) -> Option<XyzDestination>,
 ) {
   for link in links {
-    let top = link.rect.top().max(y0);
-    let bottom = link.rect.bottom().min(y1);
-
-    if bottom <= top {
-      continue;
-    }
-    let Some(rect) = KrillaRect::from_ltrb(
-      (link.rect.left() + offset.x) * PT_PER_PX,
-      (top - y0 + offset.y) * PT_PER_PX,
-      (link.rect.right() + offset.x) * PT_PER_PX,
-      (bottom - y0 + offset.y) * PT_PER_PX,
-    ) else {
+    let Some(rect) = page_rect(link.rect, (y0, y1), offset) else {
       continue;
     };
 

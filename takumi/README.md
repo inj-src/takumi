@@ -6,7 +6,7 @@ Takumi lays out a node tree with CSS and renders it to an image, an animation, o
 without a browser. Its text and inline layout port Chromium's Blink.
 
 This crate is the stable entry point. The render functions live at the crate root, and the
-types to build a tree and configure a render live in [`prelude`]. PDF output and the paint
+types to build a tree and configure a render live in [`prelude`](https://docs.rs/takumi/latest/takumi/prelude/). PDF output and the paint
 tree ship as the npm packages [`takumi-pdf`](https://www.npmjs.com/package/takumi-pdf) and
 [`takumi-paint`](https://www.npmjs.com/package/takumi-paint).
 
@@ -42,10 +42,10 @@ write_image(&image, &mut png, OutputFormat::Png)?;
 
 ## Entry points
 
-- [`render`] draws one frame. [`write_image`] encodes it as PNG, JPEG, WebP, or ICO.
-- [`render_animation`] renders every frame of a scene timeline at a fixed frame rate.
-  [`write_animation`] streams the frames into animated WebP, APNG, or GIF instead.
-- [`measure`] lays out the tree and returns box sizes and text runs without drawing.
+- [`render`](https://docs.rs/takumi_raster/latest/takumi_raster/render/fn.render.html) draws one frame. [`write_image`](https://docs.rs/takumi_raster/latest/takumi_raster/write/fn.write_image.html) encodes it as PNG, JPEG, WebP, or ICO.
+- [`render_animation`](https://docs.rs/takumi_raster/latest/takumi_raster/render/fn.render_animation.html) renders every frame of a scene timeline at a fixed frame rate.
+  [`write_animation`](https://docs.rs/takumi_raster/latest/takumi_raster/write/fn.write_animation.html) streams the frames into animated WebP, APNG, or GIF instead.
+- [`measure`](https://docs.rs/takumi_raster/latest/takumi_raster/render/fn.measure.html) lays out the tree and returns box sizes and text runs without drawing.
 - `render_svg` writes vector SVG. It needs the `svg-backend` feature.
 - `from_html` parses HTML into a node tree. It needs the `from-html` feature.
 

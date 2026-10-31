@@ -1,0 +1,69 @@
+---
+title: Element positions
+description: Find where each element of a document lands on the pages of its PDF, for previews, overlays, and click-to-source tools.
+---
+
+`renderWithBoxes` renders like `render` and also reports where every node of the input tree landed. Use it to draw an overlay over a PDF preview, or to map a click on a page back to the element that drew there.
+
+```tsx twoslash title="Render with element positions"
+import { renderWithBoxes } from "takumi-pdf";
+
+// [!code highlight]
+const { pdf, boxes } = await renderWithBoxes(
+  <main>
+    <h1>Invoice #1042</h1>
+    <p>Due on receipt.</p>
+  </main>,
+);
+```
+
+`pdf` holds the same bytes `render` returns for the same input. `boxes` lists one entry per fragment of a node on a page, page by page in paint order:
+
+| Field                       | Meaning                                                                      |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `page`                      | The output page, from 0                                                      |
+| `sourceOrder`               | The node's position in the input tree, every node counted from 0 at the root |
+| `tagName`                   | The element's tag, absent for a node without one, such as text               |
+| `x`, `y`, `width`, `height` | The box in pt, from the page's top-left corner                               |
+
+## Matching a box to its element
+
+`sourceOrder` counts the nodes of the takumi node tree the document becomes, in document order: the root is 0, its first child 1, that child's first child 2, and so on. JSX and HTML input are converted to that tree first, which folds an element's plain text into the element. Convert JSX with `fromJsx` yourself, render the tree it returns, and walk the same tree to find the node behind a box:
+
+```tsx twoslash title="Find the element a box belongs to"
+import type { Node } from "@takumi-rs/helpers";
+import { fromJsx } from "@takumi-rs/helpers/jsx";
+import { renderWithBoxes } from "takumi-pdf";
+
+const { node, css } = await fromJsx(
+  <main>
+    <h1 data-line="2">Invoice #1042</h1>
+    <p data-line="3">Due on receipt.</p>
+  </main>,
+);
+const { boxes } = await renderWithBoxes(node, { css });
+
+function inDocumentOrder(node: Node, nodes: Node[] = []): Node[] {
+  nodes.push(node);
+  if (node.type === "container") {
+    for (const child of node.children ?? []) inDocumentOrder(child, nodes);
+  }
+  return nodes;
+}
+
+const nodes = inDocumentOrder(node);
+// [!code highlight]
+const lines = boxes.map((box) => nodes[box.sourceOrder]?.attributes?.["data-line"]);
+```
+
+An element split across pages, such as a long table, has a box on each page it reaches. A table header repeated on later pages has a box on each of them with the same `sourceOrder`. Page counters keep the numbering of the tree you passed in; the text takumi writes into them has no box.
+
+## Coordinates
+
+Boxes are in PDF points from the top-left corner of the page, the space a PDF viewer such as PDF.js draws the page in. Multiply by the viewer's scale to position an overlay.
+
+## Limits
+
+- Header and footer bands, and `position: fixed` boxes repeated on every page, are not reported.
+- A box is left out where clipping or the page edge hides it entirely, and cut to what shows otherwise.
+- Text in a line has no box of its own, and neither has a plain inline element such as a `<span>` in a paragraph: both belong to the box of the element holding the line. An inline-block, flex, or grid item has its own box.

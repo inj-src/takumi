@@ -14,6 +14,7 @@ use takumi_core::{
 
 use crate::{
   bands::{RepeatBounds, Repeatable, RepeatablePage},
+  boxes::SourceOrders,
   chunks::SceneChunks,
   emitter::{DocumentState, Emitter},
   inline::{InlineCache, TextBox},
@@ -21,7 +22,7 @@ use crate::{
   krilla::{
     Document,
     destination::XyzDestination,
-    geom::{Point, Size as KrillaSize, Transform},
+    geom::{Point, Rect as KrillaRect, Size as KrillaSize, Transform},
     page::PageSettings,
     surface::Surface,
   },
@@ -212,8 +213,8 @@ struct Solved {
 enum Content {
   /// No pass was needed, so its pages draw as they lay out.
   Stream(Box<Prepared>),
-  /// The passes that settled the frame and the counters.
-  Counted(Counted),
+  /// The passes that settled the frame and the counters, with the source orders they changed.
+  Counted(Counted, Option<SourceOrders>),
 }
 
 pub(crate) struct PageDrawing<'d, 'g> {
@@ -234,14 +235,21 @@ impl PageDrawing<'_, '_> {
     settle: Settle<'_>,
   ) -> Result<PagePlan, PdfError> {
     let selection = PageSelection::new(bands.page_ranges)?;
-    let (solved, content) = Self::solve(self.inputs, page, &bands, node, settle)?;
+    let input = self.state.boxes.is_some().then(|| node.clone());
+    let (solved, mut content) =
+      Self::solve(self.inputs, page, &bands, node, settle, input.as_ref())?;
 
+    if let Content::Counted(_, orders) = &mut content
+      && let Some(boxes) = &self.state.boxes
+    {
+      boxes.borrow_mut().orders = orders.take();
+    }
     match content {
       Content::Stream(content) => self.stream(solved, content, None, selection, structural, settle),
-      Content::Counted(Counted::Pages { content, counts }) => {
+      Content::Counted(Counted::Pages { content, counts }, _) => {
         self.stream(solved, content, Some(counts), selection, structural, settle)
       }
-      Content::Counted(Counted::Laid(paginated)) => {
+      Content::Counted(Counted::Laid(paginated), _) => {
         let selection = selection.with_pages(paginated.starts.len())?;
 
         self.compose(solved, paginated, selection, structural)
@@ -257,6 +265,7 @@ impl PageDrawing<'_, '_> {
     bands: &PageBands<'_>,
     node: Node,
     settle: Settle<'_>,
+    input: Option<&Node>,
   ) -> Result<(Solved, Content), PdfError> {
     // Bands lay out at full page width and draw inside the margin areas,
     // like Chromium's print header and footer templates.
@@ -305,7 +314,7 @@ impl PageDrawing<'_, '_> {
     // Only a margin that follows a band can move the frame, which is when the content lays out
     // again from the source.
     let source = (dynamic && page.margin.follow_bands()).then(|| node.clone());
-    let mut counted = Counted::settle(node, inputs, &frame, settle)?;
+    let (mut counted, mut orders) = Counted::settle(node, inputs, &frame, settle, input)?;
 
     if dynamic {
       const BAND_PASSES: usize = 3;
@@ -334,7 +343,7 @@ impl PageDrawing<'_, '_> {
         };
 
         frame = next_frame;
-        counted = Counted::settle(source.clone(), inputs, &frame, settle)?;
+        (counted, orders) = Counted::settle(source.clone(), inputs, &frame, settle, input)?;
       }
     }
 
@@ -344,7 +353,7 @@ impl PageDrawing<'_, '_> {
         header,
         footer,
       },
-      Content::Counted(counted),
+      Content::Counted(counted, orders),
     ))
   }
 
@@ -570,14 +579,16 @@ impl<'c, 'g> PageComposer<'c, 'g> {
     }
     surface.pop();
     surface.finish();
+    let offset = CorePoint {
+      x: frame.margin.left,
+      y: frame.margin.top,
+    };
+
     add_link_annotations(
       &mut pdf_page,
       &links,
       (slice.start, slice.end),
-      CorePoint {
-        x: frame.margin.left,
-        y: frame.margin.top,
-      },
+      offset,
       self.state.tags.as_ref(),
       &anchor,
     );
@@ -586,13 +597,17 @@ impl<'c, 'g> PageComposer<'c, 'g> {
       &mut pdf_page,
       resolved.iter().flat_map(RepeatablePage::links),
       (0.0, frame.window_height),
-      CorePoint {
-        x: frame.margin.left,
-        y: frame.margin.top,
-      },
+      offset,
       None,
       &anchor,
     );
+    if let Some(boxes) = &self.state.boxes
+      && let Some(window) = KrillaRect::from_ltrb(0.0, slice.start, frame.content_width, slice.end)
+    {
+      boxes
+        .borrow_mut()
+        .collect(scene, pdf_page.index(), window, offset);
+    }
     pdf_page.finish();
     Ok(())
   }

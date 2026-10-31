@@ -26,8 +26,9 @@ use takumi_core::{
   viewport::Viewport,
 };
 use takumi_pdf::{
-  Attachment, Band, MeasureOptions, PageOptions, PageRange, PageRules, PdfMetadata, PdfOptions,
-  PdfStandard, Tagging, UncoveredText,
+  Attachment, Band, MeasureOptions, PageBox, PageOptions, PageRange, PageRules, PdfError,
+  PdfMetadata, PdfOptions, PdfStandard, RenderedPdf, Tagging, UncoveredText, render,
+  render_with_boxes,
 };
 use wasm_bindgen::prelude::*;
 
@@ -70,6 +71,10 @@ extern "C" {
   #[wasm_bindgen(typescript_type = "MeasuredSize")]
   pub type MeasuredSizeType;
 
+  /// JavaScript object holding a PDF and where its elements landed.
+  #[wasm_bindgen(typescript_type = "RenderedPdf")]
+  pub type RenderedPdfType;
+
   /// JavaScript object listing what a document needs fetched.
   #[wasm_bindgen(typescript_type = "RenderNeeds")]
   pub type RenderNeedsType;
@@ -83,6 +88,55 @@ extern "C" {
 struct MeasuredSizeOutput {
   width: f32,
   height: f32,
+}
+
+/// The PDF and boxes returned by [`PdfRenderer::render_with_boxes`].
+#[derive(serde::Serialize)]
+struct RenderedPdfOutput {
+  #[serde(with = "serde_bytes")]
+  pdf: Vec<u8>,
+  boxes: Vec<PageBoxOutput>,
+}
+
+impl From<RenderedPdf> for RenderedPdfOutput {
+  fn from(rendered: RenderedPdf) -> Self {
+    Self {
+      pdf: rendered.pdf,
+      boxes: rendered
+        .boxes
+        .into_iter()
+        .map(PageBoxOutput::from)
+        .collect(),
+    }
+  }
+}
+
+/// A [`PageBox`] as JavaScript reads it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PageBoxOutput {
+  page: usize,
+  source_order: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  tag_name: Option<String>,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+}
+
+impl From<PageBox> for PageBoxOutput {
+  fn from(page_box: PageBox) -> Self {
+    Self {
+      page: page_box.page,
+      source_order: page_box.source_order,
+      tag_name: page_box.tag_name,
+      x: page_box.x,
+      y: page_box.y,
+      width: page_box.width,
+      height: page_box.height,
+    }
+  }
 }
 
 /// The layout inputs [`PdfRenderer::render`] and [`PdfRenderer::measure`] share.
@@ -155,6 +209,57 @@ impl PdfRenderer {
     options.css = append_css(options.css.take(), document_css);
 
     Ok((node, options))
+  }
+
+  /// Reads a document and its options, then renders it with `render`.
+  fn render_document<T>(
+    &self,
+    node: NodeType,
+    options: Option<PdfRenderOptionsType>,
+    render: impl FnOnce(PdfOptions<'_>) -> Result<T, PdfError>,
+  ) -> Result<T, js_sys::Error> {
+    let (node, options) = self.read_document(node, options.map(Into::into))?;
+    let Layout {
+      viewport,
+      page,
+      images,
+      lang,
+    } = self.layout(&options)?;
+    let fonts = self.fonts.for_render(options.font_families.as_deref());
+
+    render(PdfOptions {
+      viewport,
+      fonts: &fonts,
+      node,
+      stylesheet: stylesheet(&self.resource_cache, options.css, Vec::new()).map_err(map_error)?,
+      images,
+      page,
+      page_ranges: options
+        .page_ranges
+        .map(|ranges| ranges.into_iter().map(PageRange::from).collect()),
+      background_color: page_background(options.background_color.as_deref())?,
+      header: options.header.map(Band::from).and_then(Band::node),
+      footer: options.footer.map(Band::from).and_then(Band::node),
+      pages: options.pages.map(PageRules::from).unwrap_or_default(),
+      font_families: options.font_families.map(FontFamily::from_names),
+      lang,
+      metadata: options.metadata.map(PdfMetadata::try_from).transpose()?,
+      producer: None,
+      outline: options.outline.unwrap_or(false),
+      standard: options.pdfa.map(PdfStandard::from).unwrap_or_default(),
+      tagged: options.tagged.map(Tagging::from).unwrap_or_default(),
+      attachments: options
+        .attachments
+        .unwrap_or_default()
+        .into_iter()
+        .map(Attachment::try_from)
+        .collect::<Result<_, _>>()?,
+      uncovered_text: options
+        .uncovered_text
+        .map(UncoveredText::from)
+        .unwrap_or_default(),
+    })
+    .map_err(map_error)
   }
 
   fn layout(&self, options: &PdfRenderOptions) -> Result<Layout, js_sys::Error> {
@@ -262,48 +367,23 @@ impl PdfRenderer {
     node: NodeType,
     options: Option<PdfRenderOptionsType>,
   ) -> Result<Vec<u8>, js_sys::Error> {
-    let (node, options) = self.read_document(node, options.map(Into::into))?;
-    let Layout {
-      viewport,
-      page,
-      images,
-      lang,
-    } = self.layout(&options)?;
-    let fonts = self.fonts.for_render(options.font_families.as_deref());
+    self.render_document(node, options, render)
+  }
 
-    takumi_pdf::render(PdfOptions {
-      viewport,
-      fonts: &fonts,
-      node,
-      stylesheet: stylesheet(&self.resource_cache, options.css, Vec::new()).map_err(map_error)?,
-      images,
-      page,
-      page_ranges: options
-        .page_ranges
-        .map(|ranges| ranges.into_iter().map(PageRange::from).collect()),
-      background_color: page_background(options.background_color.as_deref())?,
-      header: options.header.map(Band::from).and_then(Band::node),
-      footer: options.footer.map(Band::from).and_then(Band::node),
-      pages: options.pages.map(PageRules::from).unwrap_or_default(),
-      font_families: options.font_families.map(FontFamily::from_names),
-      lang,
-      metadata: options.metadata.map(PdfMetadata::try_from).transpose()?,
-      producer: None,
-      outline: options.outline.unwrap_or(false),
-      standard: options.pdfa.map(PdfStandard::from).unwrap_or_default(),
-      tagged: options.tagged.map(Tagging::from).unwrap_or_default(),
-      attachments: options
-        .attachments
-        .unwrap_or_default()
-        .into_iter()
-        .map(Attachment::try_from)
-        .collect::<Result<_, _>>()?,
-      uncovered_text: options
-        .uncovered_text
-        .map(UncoveredText::from)
-        .unwrap_or_default(),
-    })
-    .map_err(map_error)
+  /// Renders like `render`, and reports where each element's boxes land on the pages.
+  #[wasm_bindgen(js_name = renderWithBoxes)]
+  pub fn render_with_boxes(
+    &self,
+    node: NodeType,
+    options: Option<PdfRenderOptionsType>,
+  ) -> Result<RenderedPdfType, js_sys::Error> {
+    let rendered = self.render_document(node, options, render_with_boxes)?;
+
+    Ok(
+      to_value(&RenderedPdfOutput::from(rendered))
+        .map_err(map_error)?
+        .unchecked_into(),
+    )
   }
 
   /// Lays out a node tree without rendering and returns its size in CSS px.

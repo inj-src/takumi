@@ -6,7 +6,7 @@ Vector SVG output for takumi.
 
 [`render`] turns a node tree into SVG elements such as `<rect>`, `<path>`, `<linearGradient>`,
 `<radialGradient>`, `<filter>`, `<clipPath>`, `<mask>`, glyph outline `<path>`s, and
-embedded `<image>`s. It does not wrap a rasterized bitmap in a `data:` URL. [`quick_xml`]
+embedded `<image>`s. It does not wrap a rasterized bitmap in a `data:` URL. [`quick_xml`](https://docs.rs/quick_xml/latest/quick_xml/)
 builds the document, so every attribute and value is escaped.
 
 In the `takumi` crate, enable the `svg-backend` feature and call `takumi::render_svg`.
