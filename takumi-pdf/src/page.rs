@@ -14,7 +14,7 @@ use takumi_core::{
 
 use crate::{
   bands::{RepeatBounds, Repeatable, RepeatablePage},
-  boxes::SourceOrders,
+  boxes::{BoxCollector, BoxTree, PagePlacement, SourceOrders},
   chunks::SceneChunks,
   emitter::{DocumentState, Emitter},
   inline::{InlineCache, TextBox},
@@ -552,8 +552,8 @@ impl<'c, 'g> PageComposer<'c, 'g> {
           self.inputs,
           &self.page_context,
           frame,
-          slice.index + 1,
-          pages,
+          (slice.index + 1, pages),
+          self.state.boxes.is_some(),
         )
       })
       .collect::<Result<Vec<_>, _>>()?;
@@ -601,15 +601,53 @@ impl<'c, 'g> PageComposer<'c, 'g> {
       None,
       &anchor,
     );
-    if let Some(boxes) = &self.state.boxes
-      && let Some(window) = KrillaRect::from_ltrb(0.0, slice.start, frame.content_width, slice.end)
-    {
-      boxes
-        .borrow_mut()
-        .collect(scene, pdf_page.index(), window, offset);
+    if let Some(boxes) = &self.state.boxes {
+      self.collect_boxes(
+        &mut boxes.borrow_mut(),
+        &resolved,
+        scene,
+        slice,
+        pdf_page.index(),
+      );
     }
     pdf_page.finish();
     Ok(())
+  }
+
+  /// Adds the boxes the page leaves visible, in the order it draws them.
+  fn collect_boxes(
+    &self,
+    boxes: &mut BoxCollector,
+    resolved: &[RepeatablePage<'_>],
+    scene: SceneView<'_>,
+    slice: &PageSlice,
+    page: usize,
+  ) {
+    let frame = self.frame;
+    let (before, after): (Vec<_>, Vec<_>) = resolved
+      .iter()
+      .partition(|repeatable| repeatable.draws_before_content());
+
+    for repeatable in before {
+      repeatable.collect_boxes(frame, page, boxes);
+    }
+    if let Some(window) = KrillaRect::from_ltrb(0.0, slice.start, frame.content_width, slice.end) {
+      boxes.collect(
+        scene,
+        &BoxTree::CONTENT,
+        PagePlacement {
+          page,
+          window,
+          offset: CorePoint {
+            x: frame.margin.left,
+            y: frame.margin.top,
+          },
+        },
+      );
+    }
+    for repeatable in after {
+      repeatable.collect_boxes(frame, page, boxes);
+    }
   }
 
   /// Emits the content through this page's window: clipped to the page area and translated so

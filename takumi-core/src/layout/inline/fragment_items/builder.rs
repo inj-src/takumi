@@ -40,6 +40,8 @@ use crate::{
 /// What a line gives the texts on it: where its content box sits, its baseline, its root box's
 /// font, and the baselines of the spans on it.
 struct TextLine<'l> {
+  /// Its index among the formatting context's lines.
+  index: usize,
   content: Point<f32>,
   baseline: f32,
   root_font: BoxFont,
@@ -249,6 +251,7 @@ impl FragmentItems {
             if child.shape_result.is_some() {
               items.ellipsized |= child.inline_item.is_none();
               let text_line = TextLine {
+                index: line_index,
                 content,
                 baseline,
                 root_font,
@@ -585,6 +588,7 @@ impl FragmentItems {
         context,
         run,
         RunPlacement {
+          line: line.index,
           line_scale,
           decoration_placement,
           relative_offset: Point::ZERO,

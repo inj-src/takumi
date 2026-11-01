@@ -14,13 +14,15 @@ use takumi_core::{
 };
 
 use crate::{
-  counters::{has_page_counters, substitute_page_counters},
+  boxes::{BoxCollector, BoxOrigin, BoxTree, PagePlacement, SourceOrders},
+  counters::{has_page_counters, has_target_counters, substitute_page_counters},
   emitter::{DocumentState, Emitter},
   interactive::{Interactive, LinkTarget},
+  krilla::geom::Rect as KrillaRect,
   krilla::surface::Surface,
-  options::{BAND_EDGE_PADDING, PageBand, PdfError},
+  options::{BAND_EDGE_PADDING, PageBand, PageRule, PdfError},
   page::PageFrame,
-  tree::{PreparedTree, TreeInputs, page_root},
+  tree::{INPUT_ROOT, PreparedTree, TreeInputs, band_node, page_root},
   window::{ContentWindow, Window},
 };
 
@@ -56,6 +58,15 @@ impl RepeatBounds {
       ),
     }
   }
+
+  /// The tree its boxes are in.
+  fn origin(&self) -> BoxOrigin {
+    match self {
+      Self::Header => BoxOrigin::Header,
+      Self::Footer => BoxOrigin::Footer,
+      Self::Content { .. } => BoxOrigin::Content,
+    }
+  }
 }
 
 /// A tree drawn once per page. One holding a page counter lays out again for
@@ -67,6 +78,8 @@ pub(crate) struct Repeatable {
   /// Links collected once from the measured layout. Bands never annotate
   /// links, and a renumbered page collects its own.
   links: Vec<LinkTarget>,
+  /// How emptying a static band's target counters moved its source orders.
+  orders: Option<SourceOrders>,
 }
 
 /// What a per-page layout starts from.
@@ -91,20 +104,25 @@ impl FixedTemplate {
     self.source_order..self.source_order + node_count(&self.node)
   }
 
-  /// Lays the box out again with the counters a page asks for.
+  /// Lays the box out again with a page's counters, and how they moved its source orders.
   fn prepare(
     &self,
     page_context: &RenderContext,
     page: usize,
     pages: usize,
     page_area: Viewport,
-  ) -> Result<PreparedTree, PdfError> {
+    boxes: bool,
+  ) -> Result<(PreparedTree, Option<SourceOrders>), PdfError> {
     let mut node = self.node.clone();
 
     substitute_page_counters(&mut node, page, pages);
+    let orders = boxes.then(|| SourceOrders::between(&self.node, &node));
     let child = RenderNode::from_node(&self.parent, node);
 
-    PreparedTree::lay_out(page_root(page_context, child), page_area)
+    Ok((
+      PreparedTree::lay_out(page_root(page_context, child), page_area)?,
+      orders,
+    ))
   }
 }
 
@@ -137,12 +155,17 @@ impl Repeatable {
       }
     }
     let dynamic = template.varies() || template.nodes().any(has_page_counters);
+    let orders = template
+      .nodes()
+      .find(|node| !dynamic && has_target_counters(node))
+      .map(|node| SourceOrders::between(node, &band_node(node, pages, pages)));
 
     Ok(Self {
       prepared: tallest.ok_or(PdfError::MissingViewport)?,
       template: dynamic.then(|| RepeatTemplate::Band(Box::new(template.clone()))),
       bounds,
       links: Vec::new(),
+      orders,
     })
   }
 
@@ -159,6 +182,7 @@ impl Repeatable {
       template: template.map(|template| RepeatTemplate::Fixed(Box::new(template))),
       bounds: RepeatBounds::Content { below },
       links,
+      orders: None,
     }
   }
 
@@ -188,37 +212,48 @@ impl Repeatable {
     inputs: &TreeInputs<'_>,
     page_context: &RenderContext,
     frame: &PageFrame,
-    page: usize,
-    pages: usize,
+    (page, pages): (usize, usize),
+    boxes: bool,
   ) -> Result<RepeatablePage<'_>, PdfError> {
-    let fresh = match &self.template {
-      None => None,
-      Some(RepeatTemplate::Band(band)) => match band.for_page(page, pages) {
-        Some(node) => Some(inputs.prepare_band(node, page, pages, frame.band_viewport)?),
-        None => {
-          return Ok(RepeatablePage {
-            repeatable: self,
-            fresh: None,
-            fresh_links: Vec::new(),
-            hidden: true,
-          });
-        }
-      },
-      Some(RepeatTemplate::Fixed(template)) => {
-        Some(template.prepare(page_context, page, pages, frame.page_area)?)
-      }
-    };
-    let fresh_links = match (&fresh, &self.bounds) {
-      (Some(tree), RepeatBounds::Content { .. }) => Interactive::collect(tree).links,
-      _ => Vec::new(),
+    let mut resolved = RepeatablePage {
+      repeatable: self,
+      fresh: None,
+      fresh_links: Vec::new(),
+      hidden: false,
+      rule: None,
+      counters: None,
+      subtree: None,
     };
 
-    Ok(RepeatablePage {
-      repeatable: self,
-      fresh,
-      fresh_links,
-      hidden: false,
-    })
+    match &self.template {
+      None => {}
+      Some(RepeatTemplate::Band(band)) => {
+        let (rule, node) = band.rule_for_page(page, pages);
+
+        resolved.rule = rule;
+        match node {
+          Some(node) => {
+            let filled = band_node(node, page, pages);
+
+            resolved.counters = boxes.then(|| SourceOrders::between(node, &filled));
+            resolved.fresh = Some(inputs.prepare(filled, frame.band_viewport)?);
+          }
+          None => resolved.hidden = true,
+        }
+      }
+      Some(RepeatTemplate::Fixed(template)) => {
+        let (tree, counters) =
+          template.prepare(page_context, page, pages, frame.page_area, boxes)?;
+
+        resolved.fresh = Some(tree);
+        resolved.counters = counters;
+        resolved.subtree = template.source_order.checked_sub(INPUT_ROOT);
+      }
+    }
+    if let (Some(tree), RepeatBounds::Content { .. }) = (&resolved.fresh, &self.bounds) {
+      resolved.fresh_links = Interactive::collect(tree).links;
+    }
+    Ok(resolved)
   }
 }
 
@@ -229,6 +264,12 @@ pub(crate) struct RepeatablePage<'r> {
   fresh_links: Vec<LinkTarget>,
   /// The band's rule for this page is off.
   hidden: bool,
+  /// The [`PageRules`](crate::PageRules) entry this page takes the band from.
+  rule: Option<PageRule>,
+  /// How filling in this page's counters moved the fresh tree's source orders.
+  counters: Option<SourceOrders>,
+  /// Where a repeated box laid out again sits in the content tree.
+  subtree: Option<usize>,
 }
 
 impl RepeatablePage<'_> {
@@ -248,6 +289,32 @@ impl RepeatablePage<'_> {
   /// The links this page annotates.
   pub(crate) fn links(&self) -> impl Iterator<Item = &LinkTarget> {
     self.repeatable.links.iter().chain(&self.fresh_links)
+  }
+
+  /// Adds the boxes it leaves visible on output page `page`.
+  pub(crate) fn collect_boxes(&self, frame: &PageFrame, page: usize, boxes: &mut BoxCollector) {
+    if self.hidden {
+      return;
+    }
+    let (x, y, width, height) = self.repeatable.bounds.rect(frame, self.repeatable.height());
+    let Some(window) = KrillaRect::from_xywh(0.0, 0.0, width, height) else {
+      return;
+    };
+
+    boxes.collect(
+      self.tree().view(),
+      &BoxTree {
+        origin: self.repeatable.bounds.origin(),
+        rule: self.rule,
+        counters: self.counters.as_ref().or(self.repeatable.orders.as_ref()),
+        subtree: self.subtree,
+      },
+      PagePlacement {
+        page,
+        window,
+        offset: Point { x, y },
+      },
+    );
   }
 
   /// Emits the tree clipped to its bounds on the page, as an artifact when the

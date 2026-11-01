@@ -524,6 +524,20 @@ impl PageRules {
   }
 }
 
+/// The pages a [`PageOverride`] in [`PageRules`] covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PageRule {
+  /// [`PageRules::first`].
+  First,
+  /// [`PageRules::last`].
+  Last,
+  /// [`PageRules::odd`].
+  Odd,
+  /// [`PageRules::even`].
+  Even,
+}
+
 /// A band resolved per page: the document's tree and the rules that
 /// replace it.
 #[derive(Clone)]
@@ -551,18 +565,34 @@ impl PageBand {
 
   /// The tree page `page` of `pages` draws, 1-based, or `None` for nothing.
   pub fn for_page(&self, page: usize, pages: usize) -> Option<&Node> {
+    self.rule_for_page(page, pages).1
+  }
+
+  /// The rule page `page` of `pages` takes, if any, and the tree it draws.
+  pub(crate) fn rule_for_page(
+    &self,
+    page: usize,
+    pages: usize,
+  ) -> (Option<PageRule>, Option<&Node>) {
     let [first, last, odd, even] = &self.rules;
-    let parity = if page % 2 == 1 { odd } else { even };
-    let rule = (page == 1)
-      .then_some(first.as_ref())
-      .flatten()
-      .or((page == pages).then_some(last.as_ref()).flatten())
-      .or(parity.as_ref());
+    let parity = if page % 2 == 1 {
+      (PageRule::Odd, odd)
+    } else {
+      (PageRule::Even, even)
+    };
+    let rule = [
+      (page == 1).then_some((PageRule::First, first)),
+      (page == pages).then_some((PageRule::Last, last)),
+      Some(parity),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|(rule, band)| Some((rule, band.as_ref()?)));
 
     match rule {
-      Some(Band::Node(node)) => Some(node.as_ref()),
-      Some(Band::Off) => None,
-      None => self.default.as_ref(),
+      Some((rule, Band::Node(node))) => (Some(rule), Some(node.as_ref())),
+      Some((rule, Band::Off)) => (Some(rule), None),
+      None => (None, self.default.as_ref()),
     }
   }
 

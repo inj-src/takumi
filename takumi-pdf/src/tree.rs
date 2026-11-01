@@ -73,12 +73,7 @@ impl TreeInputs<'_> {
     pages: usize,
     viewport: Viewport,
   ) -> Result<PreparedTree, PdfError> {
-    let mut node = template.clone();
-
-    substitute_page_counters(&mut node, page, pages);
-    // A band's target hooks name no page, so they empty.
-    substitute_target_counters(&mut node, None, &|_: &str| None, &mut Vec::new());
-    self.prepare(node, viewport)
+    self.prepare(band_node(template, page, pages), viewport)
   }
 
   /// The content laid out across pages, and the `fixed` subtrees attached to the initial
@@ -129,6 +124,16 @@ impl TreeInputs<'_> {
 
     Ok((root, repeated))
   }
+}
+
+/// A band template with the given counter values filled in.
+pub(crate) fn band_node(template: &Node, page: usize, pages: usize) -> Node {
+  let mut node = template.clone();
+
+  substitute_page_counters(&mut node, page, pages);
+  // A band's target hooks name no page, so they empty.
+  substitute_target_counters(&mut node, None, &|_: &str| None, &mut Vec::new());
+  node
 }
 
 /// Whether a node's own content draws anything, i.e. whether a tagged content sequence around it

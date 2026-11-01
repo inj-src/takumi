@@ -179,13 +179,14 @@ use takumi_core::{
 /// Written as `/Producer` and `pdf:Producer` in every document takumi renders.
 pub const PRODUCER: &str = concat!("takumi-pdf ", env!("CARGO_PKG_VERSION"));
 
-pub use crate::boxes::PageBox;
+pub use crate::boxes::{BoxOrigin, PageBox};
 pub use crate::options::{
   Attachment, AttachmentRelationship, Band, MeasureOptions, MeasuredSize, PageBand, PageMargin,
-  PageMargins, PageOptions, PageOverride, PageRange, PageRules, PdfDate, PdfError, PdfMetadata,
-  PdfOptions, PdfStandard, Tagging, UncoveredText, XmpProperty, XmpSchema,
+  PageMargins, PageOptions, PageOverride, PageRange, PageRule, PageRules, PdfDate, PdfError,
+  PdfMetadata, PdfOptions, PdfStandard, Tagging, UncoveredText, XmpProperty, XmpSchema,
 };
 use crate::{
+  boxes::{BoxTree, PagePlacement},
   counters::substitute_counter_characters,
   emitter::{DocumentState, Emitter},
   glyph::Uncovered,
@@ -510,9 +511,15 @@ impl SinglePage {
         content.scene.size.height,
       )
     {
-      boxes
-        .borrow_mut()
-        .collect(content.view(), page.index(), window, CorePoint::ZERO);
+      boxes.borrow_mut().collect(
+        content.view(),
+        &BoxTree::CONTENT,
+        PagePlacement {
+          page: page.index(),
+          window,
+          offset: CorePoint::ZERO,
+        },
+      );
     }
     let rendered = Self {
       interactive: Interactive::collect(&content),

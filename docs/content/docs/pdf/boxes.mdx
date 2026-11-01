@@ -19,12 +19,14 @@ const { pdf, boxes } = await renderWithBoxes(
 
 `pdf` holds the same bytes `render` returns for the same input. `boxes` lists one entry per fragment of a node on a page, page by page in paint order:
 
-| Field                       | Meaning                                                                      |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `page`                      | The output page, from 0                                                      |
-| `sourceOrder`               | The node's position in the input tree, every node counted from 0 at the root |
-| `tagName`                   | The element's tag, absent for a node without one, such as text               |
-| `x`, `y`, `width`, `height` | The box in pt, from the page's top-left corner                               |
+| Field                       | Meaning                                                                |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `page`                      | The output page, from 0                                                |
+| `origin`                    | The tree the node is in: `"content"`, `"header"`, or `"footer"`        |
+| `rule`                      | The `pages` entry the band came from, absent for `header` and `footer` |
+| `sourceOrder`               | The node's position in its tree, every node counted from 0 at the root |
+| `tagName`                   | The element's tag, absent for a node without one, such as text         |
+| `x`, `y`, `width`, `height` | The box in pt, from the page's top-left corner                         |
 
 ## Matching a box to its element
 
@@ -56,7 +58,15 @@ const nodes = inDocumentOrder(node);
 const lines = boxes.map((box) => nodes[box.sourceOrder]?.attributes?.["data-line"]);
 ```
 
-An element split across pages, such as a long table, has a box on each page it reaches. A table header repeated on later pages has a box on each of them with the same `sourceOrder`. Page counters keep the numbering of the tree you passed in; the text takumi writes into them has no box.
+An element split across pages, such as a long table, has a box on each page it reaches. A table header repeated on later pages has a box on each of them with the same `sourceOrder`, and so does a `position: fixed` box, which repeats on every page. Page counters keep the numbering of the tree you passed in, and the number takumi writes into one belongs to the counter's box.
+
+## Headers and footers
+
+A band's boxes count in the band's own tree, so `sourceOrder` 0 is the root of the band, not of the document. `origin` says which band, and `rule` which tree it drew on that page: `rule: "first"` is the tree in `pages.first.header` or `pages.first.footer`, and a box without `rule` is from `header` or `footer` itself. Walk that tree the same way to find the element.
+
+## Inline elements
+
+An inline element in a line of text, such as `<b>` or `<a>` in a paragraph, has a box for each line it is on, around the text it draws there. Text with `visibility: hidden` draws nothing and adds nothing to it. An element nested in another comes after it, so the inner one is on top. The paragraph keeps its own box around all its lines.
 
 ## Coordinates
 
@@ -64,6 +74,6 @@ Boxes are in PDF points from the top-left corner of the page, the space a PDF vi
 
 ## Limits
 
-- Header and footer bands, and `position: fixed` boxes repeated on every page, are not reported.
 - A box is left out where clipping or the page edge hides it entirely, and cut to what shows otherwise.
-- Text in a line has no box of its own, and neither has a plain inline element such as a `<span>` in a paragraph: both belong to the box of the element holding the line. An inline-block, flex, or grid item has its own box.
+- Plain text has no box of its own: it belongs to the element around it.
+- An inline element's box covers its glyphs, not its padding or border, and an inline element holding no text, such as a `<span>` around an image, has none. An inline-block, flex, or grid item has its own box.

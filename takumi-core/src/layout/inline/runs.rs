@@ -300,6 +300,7 @@ pub struct InlineRunLayout<'c> {
 /// A measured glyph run: its text (borrowed from the layout) and local bounding box, with text-fit
 /// line scaling applied.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MeasuredInlineRun<'a> {
   /// The run's text content, borrowed from the layout.
   pub text: &'a str,
@@ -313,6 +314,12 @@ pub struct MeasuredInlineRun<'a> {
   pub height: f32,
   /// URI of the nearest enclosing anchor's `href`, if any.
   pub link: Option<Arc<str>>,
+  /// The index of its line among the formatting context's lines.
+  pub line: usize,
+  /// Source order of the element its text belongs to, absent for the formatting context's own text.
+  pub element: Option<usize>,
+  /// Whether it paints, which `visibility: hidden` text does not.
+  pub visible: bool,
 }
 
 /// A measured inline box's local bounding box, with text-fit line scaling applied to in-flow boxes'
