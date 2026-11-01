@@ -220,7 +220,11 @@ export type MeasuredSize = { width: number; height: number };
 export type PageBox = {
   /** The output page, from 0. */
   page: number;
-  /** The element's position in the input tree: every node counts, in document order, from 0 at the root. */
+  /** The tree the element is in: the document's node, or the `header` or `footer` band. */
+  origin: "content" | "header" | "footer";
+  /** The `pages` entry whose band the page draws, absent for the document's own `header` or `footer`. */
+  rule?: "first" | "last" | "odd" | "even";
+  /** The element's position in its tree: every node counts, in document order, from 0 at the root. */
   sourceOrder: number;
   /** Absent for a node built without a tag, such as text. */
   tagName?: string;

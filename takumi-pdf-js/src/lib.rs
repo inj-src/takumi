@@ -26,9 +26,9 @@ use takumi_core::{
   viewport::Viewport,
 };
 use takumi_pdf::{
-  Attachment, Band, MeasureOptions, PageBox, PageOptions, PageRange, PageRules, PdfError,
-  PdfMetadata, PdfOptions, PdfStandard, RenderedPdf, Tagging, UncoveredText, render,
-  render_with_boxes,
+  Attachment, Band, BoxOrigin, MeasureOptions, PageBox, PageOptions, PageRange, PageRule,
+  PageRules, PdfError, PdfMetadata, PdfOptions, PdfStandard, RenderedPdf, Tagging, UncoveredText,
+  render, render_with_boxes,
 };
 use wasm_bindgen::prelude::*;
 
@@ -116,6 +116,9 @@ impl From<RenderedPdf> for RenderedPdfOutput {
 #[serde(rename_all = "camelCase")]
 struct PageBoxOutput {
   page: usize,
+  origin: &'static str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  rule: Option<&'static str>,
   source_order: usize,
   #[serde(skip_serializing_if = "Option::is_none")]
   tag_name: Option<String>,
@@ -129,6 +132,18 @@ impl From<PageBox> for PageBoxOutput {
   fn from(page_box: PageBox) -> Self {
     Self {
       page: page_box.page,
+      origin: match page_box.origin {
+        BoxOrigin::Header => "header",
+        BoxOrigin::Footer => "footer",
+        _ => "content",
+      },
+      rule: page_box.rule.and_then(|rule| match rule {
+        PageRule::First => Some("first"),
+        PageRule::Last => Some("last"),
+        PageRule::Odd => Some("odd"),
+        PageRule::Even => Some("even"),
+        _ => None,
+      }),
       source_order: page_box.source_order,
       tag_name: page_box.tag_name,
       x: page_box.x,

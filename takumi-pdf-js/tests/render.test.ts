@@ -93,6 +93,30 @@ test("renderWithBoxes numbers nodes in the order of the input tree", async () =>
   expect([sourceOrder("main"), sourceOrder("header"), sourceOrder("section")]).toEqual([0, 1, 3]);
 });
 
+test("renderWithBoxes boxes header bands and inline elements in their own trees", async () => {
+  const { boxes } = await renderer.renderWithBoxes(rows(60), {
+    size: { width: 320, height: 240 },
+    header: "<header>Page <b>title</b></header>",
+    pages: { first: { header: "<header><i>Cover</i></header>" } },
+  });
+  const inBand = (tagName: string) =>
+    boxes
+      .filter((box) => box.tagName === tagName)
+      .map(({ page, origin, rule, sourceOrder }) => ({ page, origin, rule, sourceOrder }));
+  const titles = inBand("b");
+
+  expect(inBand("i")).toEqual([{ page: 0, origin: "header", rule: "first", sourceOrder: 1 }]);
+  expect(titles.length).toBeGreaterThan(0);
+  expect(titles).toEqual(
+    titles.map((_, index) => ({
+      page: index + 1,
+      origin: "header",
+      rule: undefined,
+      sourceOrder: 2,
+    })),
+  );
+});
+
 test("renders an HTML string with its own stylesheet", async () => {
   const pdf = await renderer.render(
     `<style>.title { font-size: 32px }</style><div class="title">Hello PDF</div>`,

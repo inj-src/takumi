@@ -208,6 +208,8 @@ struct TextItem {
 
 /// Where a run paints on its line, past where it was shaped.
 struct RunPlacement {
+  /// The index of its line.
+  line: usize,
   line_scale: LineScaleState,
   decoration_placement: DecorationPlacement,
   /// How far `position: relative` on its spans moves it.
@@ -511,9 +513,14 @@ impl FragmentItems {
       let scale = line_scale.scale;
       let origin = line_scale.layout_origin - self.content_box.offset;
       let top = item.baseline - face.metrics.ascent;
-      let link = match span {
-        Some(ProcessedInlineSpan::Text { link, .. }) => link.clone(),
-        _ => None,
+      let (link, element, visible) = match span {
+        Some(ProcessedInlineSpan::Text {
+          link,
+          element,
+          style,
+          ..
+        }) => (link.clone(), *element, style.parent.is_visible()),
+        _ => (None, None, node.context.style.is_visible()),
       };
 
       runs.push(MeasuredInlineRun {
@@ -523,6 +530,9 @@ impl FragmentItems {
         width: item.advance * scale,
         height: (face.metrics.ascent + face.metrics.descent) * scale,
         link,
+        line: item.placement.line,
+        element,
+        visible,
       });
     }
 
